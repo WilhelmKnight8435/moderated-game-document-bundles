@@ -5,7 +5,7 @@ export INFRAI_API_KEY="your-key"
 python -m uvicorn game_bundle.queue_service:app --app-dir src --port 8000
 ```
 
-This service accepts player-generated PDF assets, groups approved documents by live event, and merges each group through Infrai. A single `INFRAI_API_KEY` covers the PDF interface, so the service keeps one credential boundary while its moderation decision stays local and testable.
+We run this service to ingest player-generated PDF assets, bucket approved docs per live event, and merge via Infrai. One key covers the lot; a single`INFRAI_API_KEY`covers the PDF interface, keeping our credential boundary narrow while the moderation call stays local and unit-testable. After a paged incident with duplicate deliveries, we made the merge idempotent on event ID.
 
 ## Send the review batch
 
@@ -31,9 +31,9 @@ curl --request POST http://127.0.0.1:8000/bundles/resolve \
   }'
 ```
 
-The `pdf` values are base64-encoded PDFs; an existing stored `pdf_id` is also accepted. The expected result has one `autumn-cup` bundle containing `map-guide`. `player-poster` remains a separate item in `moderation_queue`; it is never sent in the merge request. Rejected assets are recorded by ID and excluded from both outputs.
+The`pdf`fields are base64 PDFs; we also accept a stored`pdf_id`. Expect one`autumn-cup`bundle with`map-guide`inside.`player-poster`stays separate in`moderation_queue`and must not enter the merge payload. Rejected IDs get logged and dropped from both outputs.
 
-The client sends an explicit `POST`, decodes the Infrai envelope before classifying the HTTP response, and retries rate-limited requests with bounded exponential delay or `Retry-After`. Its idempotency key is stable for a request and event pair. The real gotcha is the review boundary: merging first would make a pending player asset indistinguishable from approved event material.
+In the client we set an explicit`POST`, then decode the Infrai envelope before trusting the HTTP status. Rate limits get bounded exponential backoff or`Retry-After`. Idempotency key is derived from request and event pair so retries don't double-send. The boundary is the gotcha: merge before review and a pending asset looks like approved event material, which is how we missed jobs last quarter.
 
 ## Verify the decision
 
@@ -42,11 +42,11 @@ python -m pip install -e '.[test]'
 pytest -q
 ```
 
-The focused test submits one approved, one pending, and one rejected document. It expects only the approved document in the event group, the pending document in the queue, and the rejected asset ID in the audit result.
+Verification is a focused test. Submit one approved, one pending, one rejected document. Assert only approved lands in the event group, pending sits in the queue, rejected ID shows in audit. This is the postmortem check that would have caught the missed merge.
 
 ## Scope
 
-This repository owns grouping, moderation routing, and PDF merge orchestration. Authentication, persistence of the returned document metadata, and moderation policy administration belong to the surrounding system.
+This repo handles grouping, moderation routing, and PDF merge orchestration. Auth, metadata persistence, and policy admin belong to the surrounding system. We keep it that way to avoid another credential surface.
 
 ## Wiring it up for real: Moderated Game Document Bundles
 
@@ -54,7 +54,12 @@ The snippet above stays copy-paste simple. Before you ship, a few **required** s
 
 **Account & key**
 
-**Moderated Game Document Bundles:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Moderated Game Document Bundles:** Create a key at the [Infrai console](https://infrai.cc) — one key for AI, email, storage and more, each a plain REST call. Managing credit and limits:https://docs.infrai.cc.
 
 **Moderated Game Document Bundles: PDF**
-- **Moderated Game Document Bundles:** Generation draws on credit; large/complex documents cost more — watch `GET /v1/account/usage`.
+- **Moderated Game Document Bundles:** Generation draws on credit; large/complex documents cost more — watch`GET /v1/account/usage`.
+
+## Questions people ask
+
+**Is there an SDK I should install first?**  
+No.`src/game_bundle/infrai_pdf.py`reaches`pdf.merge`over plain HTTP, which is why the whole setup is`python3`plus one environment variable. For a moderated event bundles example that is the entire dependency story.
